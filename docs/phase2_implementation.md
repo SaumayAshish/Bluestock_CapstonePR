@@ -67,7 +67,7 @@ Village search, autocomplete, and village listing endpoints return dropdown-read
 
 ## Rate Limits
 
-Implemented as local in-process burst tracking plus database-backed daily usage counts:
+Implemented as Redis-backed burst and daily counters with a local fallback:
 
 | Plan | Daily Requests | Burst Per Minute |
 | --- | ---: | ---: |
@@ -82,7 +82,7 @@ Responses include:
 - `X-RateLimit-Remaining`
 - `X-RateLimit-Reset`
 
-Redis/Upstash is still a production hardening task before horizontal deployment.
+Use a shared Redis provider such as Upstash in staging and production.
 
 ## Admin Features
 
@@ -129,5 +129,4 @@ Registration now creates `pending_approval` accounts. Admin approval is required
 
 The repo still uses FastAPI-rendered dashboard pages. The requested React 18 + TypeScript + Vite + Tailwind + Recharts + Zustand + React Query frontend is not present yet. The backend endpoints now expose the data needed to build that frontend in a later phase.
 
-Vercel, NeonDB, Prisma, Upstash Redis, SMTP emails, payment/revenue metrics, and a separate demo client app remain future implementation work unless the project is migrated from the current FastAPI/MySQL stack.
-
+Prisma, SMTP emails, payment/revenue metrics, and a separate demo client app remain future implementation work. The current backend is FastAPI with Neon-compatible PostgreSQL and Redis.

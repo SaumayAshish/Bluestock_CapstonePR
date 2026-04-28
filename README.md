@@ -1,7 +1,8 @@
 # BlueStock Geography API
 
-This workspace imports Indian village directory spreadsheets into MySQL,
-normalizes the hierarchy, and exposes the data through a FastAPI REST API.
+BlueStock imports Indian village directory spreadsheets into PostgreSQL,
+normalizes the administrative hierarchy, and exposes authenticated FastAPI
+endpoints for village search and autocomplete.
 
 Architecture and import-design details are documented in
 `docs/technical_architecture.md`.
@@ -19,30 +20,18 @@ Phase 2 API/dashboard implementation notes are documented in
    pip install -r requirements.txt
    ```
 
-2. Start MySQL locally with Docker, or create the database manually.
+2. Start PostgreSQL and Redis locally.
 
    ```powershell
-   docker compose up -d mysql
+   docker compose up -d postgres redis
    ```
 
-   Manual MySQL setup:
-
-   ```sql
-   CREATE DATABASE IF NOT EXISTS bluestock
-     CHARACTER SET utf8mb4
-     COLLATE utf8mb4_unicode_ci;
-
-   CREATE USER IF NOT EXISTS 'bluestock'@'localhost' IDENTIFIED BY 'change-me';
-   GRANT ALL PRIVILEGES ON bluestock.* TO 'bluestock'@'localhost';
-   FLUSH PRIVILEGES;
-   ```
-
-3. Copy `.env.example` to `.env` and update the MySQL credentials.
+3. Copy `.env.example` to `.env` and update `DATABASE_URL`, `REDIS_URL`, and secrets.
 
 4. Import the raw dataset.
 
    ```powershell
-   python scripts\import_to_mysql.py --create-schema --replace
+   python scripts\import_to_postgres.py --create-schema --replace
    ```
 
 5. Normalize the imported rows into API tables.
@@ -57,19 +46,14 @@ Phase 2 API/dashboard implementation notes are documented in
    python scripts\verify_geography.py
    ```
 
-7. Create local API credentials.
-
-   ```powershell
-   python scripts\create_api_client.py --name "Local Development Client" --email dev@example.com --plan unlimited
-   ```
-
-8. Create the admin user and apply SaaS account schema updates.
+7. Create the admin user and a local API client.
 
    ```powershell
    python scripts\setup_saas.py
+   python scripts\create_api_client.py --name "Local Development Client" --email dev@example.com --plan unlimited
    ```
 
-9. Start the API.
+8. Start the API.
 
    ```powershell
    python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -77,12 +61,12 @@ Phase 2 API/dashboard implementation notes are documented in
 
 ## Data Model
 
-The importer writes file-level metadata to `import_files` and spreadsheet rows to
-`import_rows`. Each spreadsheet row is stored as MySQL `JSON` in `row_data`,
-which keeps the pipeline tolerant of inconsistent sheet layouts across `.xls`
-and `.ods` files.
+Raw spreadsheet rows are stored in:
 
-The normalizer populates:
+- `import_files`
+- `import_rows`
+
+The normalized hierarchy is:
 
 - `countries`
 - `states`
@@ -90,18 +74,17 @@ The normalizer populates:
 - `sub_districts`
 - `villages`
 
-The API credential and analytics tables are:
+SaaS/authentication tables are:
 
 - `api_clients`
 - `api_keys`
 - `api_usage_events`
 - `admin_users`
+- `user_state_access`
 
-Run `sql/mysql_schema.sql` manually if you prefer managing schema creation
-outside the importer.
-
-Run `sql/geography_schema.sql` manually if you prefer managing normalized API
-schema creation outside the normalizer.
+Run `sql/postgres_schema.sql` manually if you prefer managing schema creation
+outside the importer. `sql/migrations/001_initial_postgres.sql` is the initial
+Phase 1/2 migration entry.
 
 ## API
 
@@ -111,10 +94,8 @@ Health:
 Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-Authenticated endpoints require:
-
-- `X-API-Key`
-- `X-API-Secret`
+Authenticated `/v1` read endpoints require `X-API-Key`. Write endpoints require
+both `X-API-Key` and `X-API-Secret`.
 
 Endpoints:
 
@@ -147,23 +128,5 @@ Endpoints:
 - `GET /v1/autocomplete?q=ram&limit=20`
 - `GET /v1/search?q=ram&limit=20`
 
-Interactive docs are available at:
+Interactive docs are available at `http://127.0.0.1:8000/docs`.
 
-```text
-http://127.0.0.1:8000/docs
-```
-
-Dashboard pages:
-
-- `http://127.0.0.1:8000/`
-- `http://127.0.0.1:8000/admin`
-- `http://127.0.0.1:8000/portal`
-
-Default local admin credentials come from `.env`:
-
-```text
-ADMIN_EMAIL=admin@bluestock.local
-ADMIN_PASSWORD=admin12345
-```
-
-Change these before using the app outside local development.

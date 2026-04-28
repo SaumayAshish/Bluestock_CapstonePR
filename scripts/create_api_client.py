@@ -5,7 +5,7 @@ import hashlib
 import secrets
 from pathlib import Path
 
-from import_to_mysql import connect_mysql, load_env_file, mysql_config_from_env
+from import_to_postgres import connect_postgres, load_env_file, postgres_config_from_env
 from normalize_geography import execute_sql_file
 
 
@@ -16,25 +16,25 @@ def sha256(value: str) -> str:
 def create_client(name: str, email: str, plan: str) -> tuple[str, str]:
     api_key = f"ak_{secrets.token_hex(16)}"
     api_secret = f"as_{secrets.token_hex(16)}"
-    connection = connect_mysql(mysql_config_from_env())
+    connection = connect_postgres(postgres_config_from_env())
     try:
-        execute_sql_file(connection, Path("sql/geography_schema.sql"))
+        execute_sql_file(connection, Path("sql/postgres_schema.sql"))
         with connection.cursor() as cursor:
             cursor.execute(
                 """
                 INSERT INTO api_clients (name, email, business_name, plan, status)
                 VALUES (%s, %s, %s, %s, 'active')
-                ON DUPLICATE KEY UPDATE
-                  name = VALUES(name),
-                  business_name = VALUES(business_name),
-                  plan = VALUES(plan),
+                ON CONFLICT (email) DO UPDATE SET
+                  name = EXCLUDED.name,
+                  business_name = EXCLUDED.business_name,
+                  plan = EXCLUDED.plan,
                   status = 'active',
-                  is_active = TRUE,
-                  id = LAST_INSERT_ID(id)
+                  is_active = TRUE
+                RETURNING id
                 """,
                 (name, email, name, plan),
             )
-            client_id = cursor.lastrowid
+            client_id = cursor.fetchone()[0]
             cursor.execute(
                 """
                 INSERT INTO api_keys (client_id, name, key_prefix, key_hash, secret_hash)

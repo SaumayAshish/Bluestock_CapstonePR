@@ -4,7 +4,9 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from import_to_mysql import connect_mysql, load_env_file, mysql_config_from_env
+from psycopg2.extras import RealDictCursor
+
+from import_to_postgres import connect_postgres, load_env_file, postgres_config_from_env
 
 
 def fetch_one(cursor, query: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
@@ -26,7 +28,7 @@ def print_section(title: str) -> None:
 
 def run_checks(connection, fail_on_warnings: bool) -> int:
     exit_code = 0
-    cursor = connection.cursor(dictionary=True)
+    cursor = connection.cursor(cursor_factory=RealDictCursor)
     try:
         print_section("Row counts")
         for table in ("countries", "states", "districts", "sub_districts", "villages"):
@@ -161,11 +163,11 @@ def main() -> None:
     args = parse_args()
     load_env_file(Path(args.env_file))
     try:
-        connection = connect_mysql(mysql_config_from_env())
+        connection = connect_postgres(postgres_config_from_env())
     except Exception as exc:
         raise SystemExit(
-            "Could not connect to MySQL. Start the database with "
-            "`docker compose up -d mysql` or update MYSQL_* values in `.env`. "
+            "Could not connect to PostgreSQL. Start the database with "
+            "`docker compose up -d postgres` or update DATABASE_URL in `.env`. "
             f"Original error: {exc}"
         ) from exc
     try:

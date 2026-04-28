@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 
-from import_to_mysql import connect_mysql, load_env_file, mysql_config_from_env
+from import_to_postgres import connect_postgres, load_env_file, postgres_config_from_env
 
 
-GEOGRAPHY_SCHEMA = Path("sql/geography_schema.sql")
+GEOGRAPHY_SCHEMA = Path("sql/postgres_schema.sql")
 
 
 def execute_sql_file(connection, path: Path) -> None:
@@ -26,25 +25,29 @@ def normalize_name_sql(expression: str) -> str:
 def transform(connection, replace: bool) -> None:
     with connection.cursor() as cursor:
         if replace:
-            cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
-            for table in (
-                "api_usage_events",
-                "api_keys",
-                "api_clients",
-                "villages",
-                "sub_districts",
-                "districts",
-                "states",
-                "countries",
-            ):
-                cursor.execute(f"TRUNCATE TABLE {table}")
-            cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
+            cursor.execute(
+                "TRUNCATE TABLE "
+                + ", ".join(
+                    (
+                        "api_usage_events",
+                        "user_state_access",
+                        "api_keys",
+                        "api_clients",
+                        "villages",
+                        "sub_districts",
+                        "districts",
+                        "states",
+                        "countries",
+                    )
+                )
+                + " RESTART IDENTITY CASCADE"
+            )
 
         cursor.execute(
             """
             INSERT INTO countries (code, name)
             VALUES ('IN', 'India')
-            ON DUPLICATE KEY UPDATE name = VALUES(name)
+            ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name
             """
         )
 
@@ -64,10 +67,16 @@ def transform(connection, replace: bool) -> None:
             ) raw
             JOIN countries c ON c.code = 'IN'
             WHERE raw.state_code <> '00' AND raw.state_name <> ''
-            ON DUPLICATE KEY UPDATE
-              name = VALUES(name),
-              search_name = VALUES(search_name)
+            ON CONFLICT (code) DO UPDATE SET
+              name = EXCLUDED.name,
+              search_name = EXCLUDED.search_name
             """
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1'))", "r.row_data ->> 'column_1'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_2'))", "r.row_data ->> 'column_2'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3'))", "r.row_data ->> 'column_3'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5'))", "r.row_data ->> 'column_5'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7'))", "r.row_data ->> 'column_7'")
+            .replace(" REGEXP ", " ~ ")
         )
 
         cursor.execute(
@@ -87,10 +96,16 @@ def transform(connection, replace: bool) -> None:
             ) raw
             JOIN states s ON s.code = raw.state_code
             WHERE raw.district_name <> ''
-            ON DUPLICATE KEY UPDATE
-              name = VALUES(name),
-              search_name = VALUES(search_name)
+            ON CONFLICT (state_id, code) DO UPDATE SET
+              name = EXCLUDED.name,
+              search_name = EXCLUDED.search_name
             """
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1'))", "r.row_data ->> 'column_1'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3'))", "r.row_data ->> 'column_3'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_4'))", "r.row_data ->> 'column_4'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5'))", "r.row_data ->> 'column_5'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7'))", "r.row_data ->> 'column_7'")
+            .replace(" REGEXP ", " ~ ")
         )
 
         cursor.execute(
@@ -112,10 +127,16 @@ def transform(connection, replace: bool) -> None:
             JOIN states s ON s.code = raw.state_code
             JOIN districts d ON d.state_id = s.id AND d.code = raw.district_code
             WHERE raw.sub_district_name <> ''
-            ON DUPLICATE KEY UPDATE
-              name = VALUES(name),
-              search_name = VALUES(search_name)
+            ON CONFLICT (district_id, code) DO UPDATE SET
+              name = EXCLUDED.name,
+              search_name = EXCLUDED.search_name
             """
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1'))", "r.row_data ->> 'column_1'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3'))", "r.row_data ->> 'column_3'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5'))", "r.row_data ->> 'column_5'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_6'))", "r.row_data ->> 'column_6'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7'))", "r.row_data ->> 'column_7'")
+            .replace(" REGEXP ", " ~ ")
         )
 
         cursor.execute(
@@ -133,22 +154,26 @@ def transform(connection, replace: bool) -> None:
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')) AS district_code,
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5')) AS sub_district_code,
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7')) AS village_code,
-                TRIM(REGEXP_REPLACE(JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_8')), '[[:space:]]*\\\\([0-9]+\\\\)[[:space:]]*$', '')) AS village_name
+                TRIM(REGEXP_REPLACE(r.row_data ->> 'column_8', '[[:space:]]*\\([0-9]+\\)[[:space:]]*$', '')) AS village_name
               FROM import_rows r
-              WHERE JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')) REGEXP '^[0-9]+$'
-                AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')) <> '000'
-                AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5')) <> '00000'
-                AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7')) <> '000000'
+              WHERE r.row_data ->> 'column_1' ~ '^[0-9]+$'
+                AND r.row_data ->> 'column_3' <> '000'
+                AND r.row_data ->> 'column_5' <> '00000'
+                AND r.row_data ->> 'column_7' <> '000000'
             ) raw
             JOIN states s ON s.code = raw.state_code
             JOIN districts d ON d.state_id = s.id AND d.code = raw.district_code
             JOIN sub_districts sd ON sd.district_id = d.id AND sd.code = raw.sub_district_code
             WHERE raw.village_name <> ''
-            ON DUPLICATE KEY UPDATE
-              name = VALUES(name),
-              display_name = VALUES(display_name),
-              search_name = VALUES(search_name)
+            ON CONFLICT (sub_district_id, code) DO UPDATE SET
+              name = EXCLUDED.name,
+              display_name = EXCLUDED.display_name,
+              search_name = EXCLUDED.search_name
             """
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1'))", "r.row_data ->> 'column_1'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3'))", "r.row_data ->> 'column_3'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5'))", "r.row_data ->> 'column_5'")
+            .replace("JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7'))", "r.row_data ->> 'column_7'")
         )
     connection.commit()
 
@@ -171,7 +196,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     load_env_file(Path(args.env_file))
-    connection = connect_mysql(mysql_config_from_env())
+    connection = connect_postgres(postgres_config_from_env())
     try:
         if args.create_schema:
             execute_sql_file(connection, GEOGRAPHY_SCHEMA)

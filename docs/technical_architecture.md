@@ -7,12 +7,12 @@
 | Component | Implemented Technology | Status | Notes |
 | --- | --- | --- | --- |
 | Backend runtime | Python + FastAPI | Complete | The current codebase exposes REST endpoints from `app/main.py`. This differs from the earlier Node.js + Express proposal. |
-| Database | MySQL 8.4 | Complete | `docker-compose.yml` provisions local MySQL and the SQL files create raw import and normalized API tables. |
-| ORM | Direct SQL via `mysql-connector-python` | Complete | The project uses explicit SQL for imports, normalization, authentication, and analytics queries. |
+| Database | PostgreSQL 16 / Neon-compatible PostgreSQL | Complete | `docker-compose.yml` provisions local PostgreSQL; `DATABASE_URL` can point to Neon. |
+| ORM | Direct SQL via `psycopg2` | Complete | The project uses explicit PostgreSQL SQL for imports, normalization, authentication, and analytics queries. |
 | Frontend framework | Server-rendered HTML/JavaScript from FastAPI | Partial | Admin and client portal pages are available, but there is no React/Vite application. |
 | Charting library | None | Not implemented | Usage data is exposed in tables and JSON endpoints. |
-| Caching layer | In-process rate window | Partial | API rate limiting is implemented in memory. Redis/Upstash is not implemented. |
-| Rate limiting | FastAPI dependency + in-memory deque | Partial | Works for local/single-process use. It is not distributed across regions or instances. |
+| Caching layer | Redis | Complete | Redis is used for response caching and distributed rate-limit counters when `REDIS_URL` is configured. |
+| Rate limiting | Redis + database-backed usage fallback | Complete | Daily and burst limits are enforced per API key. |
 | Authentication | API key/secret + HMAC JWT + PBKDF2 password hashes | Complete | API clients use `X-API-Key` and `X-API-Secret`; portal/admin sessions use JWT bearer tokens. |
 | Hosting platform | Local Uvicorn/Docker | Partial | No Vercel/serverless deployment configuration is present. |
 
@@ -52,7 +52,7 @@
 +--------------------------------------------------------------------+
 |                            DATA LAYER                              |
 |  +--------------------------------------------------------------+  |
-|  | MySQL                                                        |  |
+|  | PostgreSQL                                                   |  |
 |  | - import_files      - import_rows                            |  |
 |  | - countries         - states                                 |  |
 |  | - districts         - sub_districts                          |  |
@@ -70,9 +70,9 @@ API request flow:
 1. Client sends request with `X-API-Key` and `X-API-Secret`.
 2. FastAPI validates the key and secret hashes against `api_keys`.
 3. The client account is checked for active status.
-4. Plan-based rate limiting is applied in process.
+4. Plan-based rate limiting is applied through Redis, with local fallback.
 5. The request is routed to the geography handler.
-6. MySQL queries run against normalized geography tables.
+6. PostgreSQL queries run against normalized geography tables.
 7. Usage is logged to `api_usage_events`.
 8. JSON response is returned to the client.
 
@@ -82,11 +82,11 @@ Portal/admin flow:
 2. Password is verified with PBKDF2.
 3. The API returns an HMAC-signed JWT.
 4. Portal/admin endpoints validate the JWT bearer token.
-5. Account, key, usage, and admin summary data are returned from MySQL.
+5. Account, key, usage, and admin summary data are returned from PostgreSQL.
 
 Data import flow:
 
-1. `scripts/import_to_mysql.py` reads `.xls`, `.xlsx`, and `.ods` files from `dataset/`.
+1. `scripts/import_to_postgres.py` reads `.xls`, `.xlsx`, and `.ods` files from `dataset/`.
 2. Rows are stored as JSON in `import_rows`, with file metadata in `import_files`.
 3. `scripts/normalize_geography.py` creates/verifies the India country record.
 4. States, districts, sub-districts, and villages are upserted into normalized tables.
@@ -125,7 +125,7 @@ The normalized API schema follows a 3NF hierarchy:
 | `states` | `code`, `(country_id, search_name)` | State lookup and listing |
 | `districts` | `(state_id, code)`, `(state_id, search_name)` | State-scoped district joins |
 | `sub_districts` | `(district_id, code)`, `(district_id, search_name)` | District-scoped sub-district joins |
-| `villages` | `(sub_district_id, code)`, `(sub_district_id, search_name)`, `search_name`, full-text `(name, display_name)` | Hierarchical and search queries |
+| `villages` | `(sub_district_id, code)`, `(sub_district_id, search_name)`, `search_name`, trigram `search_name` | Hierarchical and search queries |
 | `api_clients` | `email` | Login and uniqueness checks |
 | `api_keys` | `key_hash`, `client_id` | Authentication lookups |
 | `api_usage_events` | `(client_id, created_at)`, `(api_key_id, created_at)` | Time-series usage analytics |
@@ -149,7 +149,7 @@ Country: India (code: IN)
 - Original MDDS codes are preserved in `code` fields.
 - Core tables include `created_at` timestamps.
 - API keys can be deactivated without deleting credentials.
-- The current in-memory rate limiter should be replaced with Redis before multi-instance production deployment.
+- Redis-backed rate limiting is ready for multi-instance deployment when `REDIS_URL` points to a shared Redis provider.
 
 ## 5. Data Import Strategy
 
@@ -180,11 +180,11 @@ The import pipeline expects the MDDS village directory spreadsheet layout:
 
 ### 5.3 Import Process Workflow
 
-1. Start MySQL with `docker compose up -d mysql` or provide compatible MySQL credentials in `.env`.
+1. Start PostgreSQL and Redis with `docker compose up -d postgres redis` or provide `DATABASE_URL` and `REDIS_URL` in `.env`.
 2. Import source spreadsheets:
 
    ```powershell
-   python scripts\import_to_mysql.py --create-schema --replace
+   python scripts\import_to_postgres.py --create-schema --replace
    ```
 
 3. Normalize the imported rows:

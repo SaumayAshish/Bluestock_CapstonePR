@@ -1,21 +1,24 @@
 services:
-  mysql:
-    image: mysql:8.4
-    container_name: bluestock-mysql
+  postgres:
+    image: postgres:16
+    container_name: bluestock-postgres
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root-password
-      MYSQL_DATABASE: bluestock
-      MYSQL_USER: bluestock
-      MYSQL_PASSWORD: change-me
+      POSTGRES_DB: bluestock
+      POSTGRES_USER: bluestock
+      POSTGRES_PASSWORD: bluestock
     ports:
-      - "3307:3306"
+      - "5432:5432"
     volumes:
-      - mysql_data:/var/lib/mysql
-      - ./sql/mysql_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/postgres_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+
+  redis:
+    image: redis:7-alpine
+    container_name: bluestock-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
 
 volumes:
-  mysql_data:
+  postgres_data:

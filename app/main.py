@@ -14,8 +14,10 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import mysql.connector
-from mysql.connector import pooling
+import psycopg2
+from psycopg2 import errors, pool
+from psycopg2.extras import RealDictCursor
+import redis
 from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -36,12 +38,13 @@ PLAN_LIMITS_PER_MINUTE = {plan: limits["burst"] for plan, limits in PLAN_LIMITS.
 FREE_EMAIL_DOMAINS = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com", "aol.com"}
 
 rate_windows: dict[int, deque[float]] = defaultdict(deque)
-connection_pool: pooling.MySQLConnectionPool | None = None
+connection_pool: pool.SimpleConnectionPool | None = None
+redis_client: redis.Redis | None = None
 
 app = FastAPI(
     title="BlueStock Geography API",
     version="0.1.0",
-    description="Village-level India geography API backed by normalized MySQL data.",
+    description="Village-level India geography API backed by normalized PostgreSQL data.",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -105,30 +108,64 @@ class ApiKeyRotateRequest(BaseModel):
     key_id: int
 
 
-def mysql_config() -> dict[str, Any]:
-    return {
-        "host": os.getenv("MYSQL_HOST", "127.0.0.1"),
-        "port": int(os.getenv("MYSQL_PORT", "3306")),
-        "user": os.getenv("MYSQL_USER", "root"),
-        "password": os.getenv("MYSQL_PASSWORD", ""),
-        "database": os.getenv("MYSQL_DATABASE", "bluestock"),
-    }
+def database_url() -> str:
+    return os.getenv(
+        "DATABASE_URL",
+        "postgresql://bluestock:bluestock@127.0.0.1:5432/bluestock",
+    )
+
+
+def get_redis_client() -> redis.Redis | None:
+    global redis_client
+    if redis_client is not None:
+        return redis_client
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        return None
+    try:
+        redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+        redis_client.ping()
+        return redis_client
+    except redis.RedisError:
+        redis_client = None
+        return None
+
+
+def cache_get(key: str) -> Any | None:
+    client = get_redis_client()
+    if not client:
+        return None
+    try:
+        value = client.get(key)
+        return json.loads(value) if value else None
+    except (redis.RedisError, json.JSONDecodeError):
+        return None
+
+
+def cache_set(key: str, value: Any, ttl_seconds: int = 300) -> None:
+    client = get_redis_client()
+    if not client:
+        return
+    try:
+        client.setex(key, ttl_seconds, json.dumps(value, default=str))
+    except redis.RedisError:
+        return
 
 
 @contextmanager
 def db_connection():
     global connection_pool
     if connection_pool is None:
-        connection_pool = pooling.MySQLConnectionPool(
-            pool_name="bluestock_api_pool",
-            pool_size=int(os.getenv("MYSQL_POOL_SIZE", "10")),
-            **mysql_config(),
+        connection_pool = pool.SimpleConnectionPool(
+            minconn=1,
+            maxconn=int(os.getenv("POSTGRES_POOL_SIZE", "10")),
+            dsn=database_url(),
         )
-    connection = connection_pool.get_connection()
+    connection = connection_pool.getconn()
     try:
         yield connection
     finally:
-        connection.close()
+        connection_pool.putconn(connection)
 
 
 def sha256(value: str) -> str:
@@ -215,11 +252,11 @@ def bearer_token(authorization: str | None) -> str:
 
 def fetch_all(query: str, params: tuple = ()) -> list[dict[str, Any]]:
     with db_connection() as connection:
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
         cursor.execute(query, params)
         rows = cursor.fetchall()
         cursor.close()
-        return rows
+        return [dict(row) for row in rows]
 
 
 def fetch_one(query: str, params: tuple = ()) -> dict[str, Any] | None:
@@ -399,8 +436,34 @@ def authenticated_client(
 
 def enforce_rate_limit(client: dict[str, Any]) -> None:
     limits = plan_limits(client["plan"])
-    limit = limits["burst"]
+    redis_conn = get_redis_client()
     now = time.time()
+    reset_epoch = today_reset_timestamp()
+    if redis_conn:
+        try:
+            minute_key = f"rate:minute:{client['api_key_id']}:{int(now // 60)}"
+            daily_key = f"rate:day:{client['api_key_id']}:{utcnow().date().isoformat()}"
+            minute_count = redis_conn.incr(minute_key)
+            if minute_count == 1:
+                redis_conn.expire(minute_key, 70)
+            daily_count = redis_conn.incr(daily_key)
+            if daily_count == 1:
+                redis_conn.expireat(daily_key, reset_epoch)
+            if minute_count > limits["burst"]:
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            if daily_count > limits["daily"]:
+                raise HTTPException(status_code=429, detail="Daily quota exceeded")
+            client["rate_limit"] = {
+                "limit": limits["daily"],
+                "remaining": max(limits["daily"] - int(daily_count), 0),
+                "reset": today_reset_iso(),
+                "reset_epoch": reset_epoch,
+            }
+            return
+        except redis.RedisError:
+            pass
+
+    limit = limits["burst"]
     window = rate_windows[int(client["api_key_id"])]
     while window and now - window[0] >= 60:
         window.popleft()
@@ -412,7 +475,7 @@ def enforce_rate_limit(client: dict[str, Any]) -> None:
         """
         SELECT COUNT(*) AS used
         FROM api_usage_events
-        WHERE api_key_id = %s AND created_at >= UTC_DATE()
+        WHERE api_key_id = %s AND created_at >= CURRENT_DATE
         """,
         (client["api_key_id"],),
     )
@@ -425,7 +488,7 @@ def enforce_rate_limit(client: dict[str, Any]) -> None:
         "limit": daily_limit,
         "remaining": remaining,
         "reset": today_reset_iso(),
-        "reset_epoch": today_reset_timestamp(),
+        "reset_epoch": reset_epoch,
     }
 
 
@@ -526,6 +589,7 @@ def register_client(payload: RegisterRequest) -> dict[str, Any]:
                 INSERT INTO api_clients
                   (name, email, business_name, gst_number, phone, password_hash, plan, status, is_active)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending_approval', TRUE)
+                RETURNING id
                 """,
                 (
                     payload.name,
@@ -537,9 +601,9 @@ def register_client(payload: RegisterRequest) -> dict[str, Any]:
                     payload.plan,
                 ),
             )
-            client_id = int(cursor.lastrowid)
+            client_id = int(cursor.fetchone()[0])
             connection.commit()
-        except mysql.connector.IntegrityError:
+        except errors.UniqueViolation:
             connection.rollback()
             raise HTTPException(status_code=409, detail="Client email already exists")
         finally:
@@ -591,7 +655,7 @@ def portal_me(client: dict[str, Any] = Depends(authenticated_portal_client)) -> 
           COALESCE(ROUND(AVG(latency_ms)), 0) AS avg_latency_ms
         FROM api_usage_events
         WHERE client_id = %s
-          AND created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)
+          AND created_at >= NOW() - INTERVAL '1 day'
         """,
         (client["id"],),
     )
@@ -681,7 +745,7 @@ def portal_usage(client: dict[str, Any] = Depends(authenticated_portal_client)) 
         SELECT DATE(created_at) AS day, COUNT(*) AS requests, ROUND(AVG(latency_ms)) AS avg_latency_ms
         FROM api_usage_events
         WHERE client_id = %s
-          AND created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)
+          AND created_at >= CURRENT_DATE - INTERVAL '14 days'
         GROUP BY DATE(created_at)
         ORDER BY day DESC
         """,
@@ -708,8 +772,8 @@ def admin_summary(_: dict[str, Any] = Depends(authenticated_admin)) -> dict[str,
         SELECT
           (SELECT COUNT(*) FROM api_clients) AS clients,
           (SELECT COUNT(*) FROM api_keys) AS api_keys,
-          (SELECT COUNT(*) FROM api_usage_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)) AS requests_24h,
-          (SELECT COALESCE(ROUND(AVG(latency_ms)), 0) FROM api_usage_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)) AS avg_latency_ms,
+          (SELECT COUNT(*) FROM api_usage_events WHERE created_at >= NOW() - INTERVAL '1 day') AS requests_24h,
+          (SELECT COALESCE(ROUND(AVG(latency_ms)), 0) FROM api_usage_events WHERE created_at >= NOW() - INTERVAL '1 day') AS avg_latency_ms,
           (SELECT COUNT(*) FROM states) AS states,
           (SELECT COUNT(*) FROM districts) AS districts,
           (SELECT COUNT(*) FROM sub_districts) AS sub_districts,
@@ -817,7 +881,7 @@ def admin_usage(_: dict[str, Any] = Depends(authenticated_admin)) -> dict[str, A
         """
         SELECT DATE(created_at) AS day, COUNT(*) AS requests, ROUND(AVG(latency_ms)) AS avg_latency_ms
         FROM api_usage_events
-        WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)
+        WHERE created_at >= CURRENT_DATE - INTERVAL '14 days'
         GROUP BY DATE(created_at)
         ORDER BY day DESC
         """
@@ -852,7 +916,7 @@ def admin_analytics(_: dict[str, Any] = Depends(authenticated_admin)) -> dict[st
         """
         SELECT DATE(created_at) AS day, COUNT(*) AS requests
         FROM api_usage_events
-        WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+        WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
         GROUP BY DATE(created_at)
         ORDER BY day
         """
@@ -864,7 +928,7 @@ def admin_analytics(_: dict[str, Any] = Depends(authenticated_admin)) -> dict[st
         """
         SELECT endpoint, COUNT(*) AS requests
         FROM api_usage_events
-        WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+        WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
         GROUP BY endpoint
         ORDER BY requests DESC
         LIMIT 10
@@ -872,10 +936,10 @@ def admin_analytics(_: dict[str, Any] = Depends(authenticated_admin)) -> dict[st
     )
     hourly = fetch_all(
         """
-        SELECT HOUR(created_at) AS hour, COUNT(*) AS requests
+        SELECT EXTRACT(HOUR FROM created_at)::int AS hour, COUNT(*) AS requests
         FROM api_usage_events
-        WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-        GROUP BY HOUR(created_at)
+        WHERE created_at >= NOW() - INTERVAL '7 days'
+        GROUP BY EXTRACT(HOUR FROM created_at)::int
         ORDER BY hour
         """
     )
@@ -883,7 +947,7 @@ def admin_analytics(_: dict[str, Any] = Depends(authenticated_admin)) -> dict[st
         """
         SELECT DATE(created_at) AS day, ROUND(AVG(latency_ms)) AS avg_ms, MAX(latency_ms) AS max_ms
         FROM api_usage_events
-        WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+        WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
         GROUP BY DATE(created_at)
         ORDER BY day
         """
@@ -988,7 +1052,7 @@ def admin_api_logs(
           ue.endpoint,
           ue.latency_ms AS response_time_ms,
           ue.status_code,
-          CONCAT(SUBSTRING(COALESCE(ue.ip_address, ''), 1, 7), '***') AS masked_ip
+          CONCAT(SUBSTRING(COALESCE(ue.ip_address, '') FROM 1 FOR 7), '***') AS masked_ip
         FROM api_usage_events ue
         JOIN api_clients c ON c.id = ue.client_id
         JOIN api_keys ak ON ak.id = ue.api_key_id
@@ -1015,7 +1079,7 @@ def admin_api_logs_csv(_: dict[str, Any] = Depends(authenticated_admin)) -> Resp
           ue.endpoint,
           ue.latency_ms AS response_time_ms,
           ue.status_code,
-          CONCAT(SUBSTRING(COALESCE(ue.ip_address, ''), 1, 7), '***') AS masked_ip
+          CONCAT(SUBSTRING(COALESCE(ue.ip_address, '') FROM 1 FOR 7), '***') AS masked_ip
         FROM api_usage_events ue
         JOIN api_clients c ON c.id = ue.client_id
         JOIN api_keys ak ON ak.id = ue.api_key_id
@@ -1036,6 +1100,9 @@ def states(
     response: Response,
     _: dict[str, Any] = Depends(authenticated_client),
 ) -> dict[str, Any]:
+    cached = cache_get("v1:states")
+    if cached is not None:
+        return api_success(request, response, cached)
     rows = fetch_all(
         """
         SELECT id, code, name
@@ -1043,6 +1110,7 @@ def states(
         ORDER BY name
         """
     )
+    cache_set("v1:states", rows, 3600)
     return api_success(request, response, rows)
 
 
@@ -1062,6 +1130,10 @@ def districts(
     if state_code:
         conditions.append("s.code = %s")
         params.append(state_code)
+    cache_key = f"v1:districts:{state_id or ''}:{state_code or ''}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return api_success(request, response, cached)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     rows = fetch_all(
         f"""
@@ -1073,6 +1145,7 @@ def districts(
         """,
         tuple(params),
     )
+    cache_set(cache_key, rows, 1800)
     return api_success(request, response, rows)
 
 
@@ -1083,6 +1156,10 @@ def districts_by_state(
     response: Response,
     _: dict[str, Any] = Depends(authenticated_client),
 ) -> dict[str, Any]:
+    cache_key = f"v1:state-districts:{state_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return api_success(request, response, cached)
     rows = fetch_all(
         """
         SELECT d.id, d.code, d.name, s.id AS state_id, s.code AS state_code, s.name AS state_name
@@ -1095,6 +1172,7 @@ def districts_by_state(
     )
     if not rows:
         raise HTTPException(status_code=404, detail="State or districts not found")
+    cache_set(cache_key, rows, 1800)
     return api_success(request, response, rows)
 
 
@@ -1114,6 +1192,10 @@ def sub_districts(
     if district_code:
         conditions.append("d.code = %s")
         params.append(district_code)
+    cache_key = f"v1:sub-districts:{district_id or ''}:{district_code or ''}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return api_success(request, response, cached)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     rows = fetch_all(
         f"""
@@ -1129,6 +1211,7 @@ def sub_districts(
         """,
         tuple(params),
     )
+    cache_set(cache_key, rows, 1800)
     return api_success(request, response, rows)
 
 
@@ -1139,6 +1222,10 @@ def subdistricts_by_district(
     response: Response,
     _: dict[str, Any] = Depends(authenticated_client),
 ) -> dict[str, Any]:
+    cache_key = f"v1:district-subdistricts:{district_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return api_success(request, response, cached)
     rows = fetch_all(
         """
         SELECT
@@ -1155,6 +1242,7 @@ def subdistricts_by_district(
     )
     if not rows:
         raise HTTPException(status_code=404, detail="District or sub-districts not found")
+    cache_set(cache_key, rows, 1800)
     return api_success(request, response, rows)
 
 
@@ -1176,6 +1264,10 @@ def villages(
     if q:
         conditions.append("v.search_name LIKE %s")
         params.append(f"{q.lower()}%")
+    cache_key = f"v1:villages:{sub_district_id or ''}:{q or ''}:{limit}:{offset}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return api_success(request, response, cached)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     params.extend([limit, offset])
     rows = fetch_all(
@@ -1195,7 +1287,9 @@ def villages(
         """,
         tuple(params),
     )
-    return api_success(request, response, [dropdown_village(row) for row in rows])
+    data = [dropdown_village(row) for row in rows]
+    cache_set(cache_key, data, 600)
+    return api_success(request, response, data)
 
 
 @app.get("/v1/subdistricts/{sub_district_id}/villages")
@@ -1208,6 +1302,10 @@ def villages_by_subdistrict(
     _: dict[str, Any] = Depends(authenticated_client),
 ) -> dict[str, Any]:
     offset = (page - 1) * limit
+    cache_key = f"v1:subdistrict-villages:{sub_district_id}:{page}:{limit}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return api_success(request, response, cached)
     rows = fetch_all(
         """
         SELECT
@@ -1225,7 +1323,9 @@ def villages_by_subdistrict(
         """,
         (sub_district_id, limit, offset),
     )
-    return api_success(request, response, [dropdown_village(row) for row in rows])
+    data = [dropdown_village(row) for row in rows]
+    cache_set(cache_key, data, 600)
+    return api_success(request, response, data)
 
 
 @app.get("/v1/autocomplete")
@@ -1240,6 +1340,10 @@ def autocomplete(
 ) -> dict[str, Any]:
     if hierarchyLevel != "village":
         raise HTTPException(status_code=400, detail="Only village autocomplete is currently supported")
+    cache_key = f"v1:autocomplete:{hierarchyLevel}:{q.lower()}:{state_id or ''}:{limit}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return api_success(request, response, cached)
     conditions = ["v.search_name LIKE %s"]
     params: list[Any] = [f"{q.lower()}%"]
     if state_id:
@@ -1263,7 +1367,9 @@ def autocomplete(
         """,
         tuple(params),
     )
-    return api_success(request, response, [dropdown_village(row) for row in rows])
+    data = [dropdown_village(row) for row in rows]
+    cache_set(cache_key, data, 300)
+    return api_success(request, response, data)
 
 
 @app.get("/v1/search")
@@ -1289,6 +1395,10 @@ def search(
     if subDistrict:
         conditions.append("(sd.code = %s OR sd.search_name = %s)")
         params.extend([subDistrict, subDistrict.lower()])
+    cache_key = f"v1:search:{q.lower()}:{state or ''}:{district or ''}:{subDistrict or ''}:{limit}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return api_success(request, response, cached)
     params.extend([f"{q.lower()}%", limit])
     rows = fetch_all(
         f"""
@@ -1309,7 +1419,9 @@ def search(
         """,
         tuple(params),
     )
-    return api_success(request, response, [dropdown_village(row) for row in rows])
+    data = [dropdown_village(row) for row in rows]
+    cache_set(cache_key, data, 300)
+    return api_success(request, response, data)
 
 
 DASHBOARD_CSS = """
@@ -1332,7 +1444,7 @@ def home_page() -> str:
     return f"""
     <!doctype html><html><head><title>BlueStock API</title><style>{DASHBOARD_CSS}</style></head>
     <body><header><h1>BlueStock Geography API</h1><nav><a style="color:white" href="/admin">Admin</a> &nbsp; <a style="color:white" href="/portal">Client Portal</a> &nbsp; <a style="color:white" href="/docs">API Docs</a></nav></header>
-    <main><section><h2>Local SaaS Backend</h2><p class="muted">MySQL-backed village-level geography API with API-key authentication, client management, and usage analytics.</p>
+    <main><section><h2>Local SaaS Backend</h2><p class="muted">PostgreSQL-backed village-level geography API with API-key authentication, Redis rate limiting, and usage analytics.</p>
     <div class="grid" id="health"></div></section></main>
     <script>
     fetch('/health').then(r=>r.json()).then(d=>health.innerHTML=`<div class="metric">Status<b>${{d.status}}</b></div><div class="metric">Villages<b>${{d.villages.toLocaleString()}}</b></div>`);

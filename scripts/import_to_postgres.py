@@ -9,49 +9,44 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+import psycopg2
+from psycopg2.extras import execute_values
 
 SUPPORTED_EXTENSIONS = {".xls", ".xlsx", ".ods"}
 SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS import_files (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      id BIGSERIAL PRIMARY KEY,
       file_name VARCHAR(255) NOT NULL,
       file_path VARCHAR(768) NOT NULL,
       state_code VARCHAR(8) NULL,
       state_name VARCHAR(255) NULL,
       file_extension VARCHAR(16) NOT NULL,
-      imported_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uq_import_files_path (file_path)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      imported_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (file_path)
+    )
     """,
     """
     CREATE TABLE IF NOT EXISTS import_rows (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-      import_file_id BIGINT UNSIGNED NOT NULL,
+      id BIGSERIAL PRIMARY KEY,
+      import_file_id BIGINT NOT NULL REFERENCES import_files (id) ON DELETE CASCADE,
       sheet_name VARCHAR(255) NOT NULL,
-      source_row_number INT UNSIGNED NOT NULL,
+      source_row_number INTEGER NOT NULL,
       row_hash CHAR(64) NOT NULL,
-      row_data JSON NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uq_import_rows_source (import_file_id, sheet_name, source_row_number),
-      KEY ix_import_rows_hash (row_hash),
-      CONSTRAINT fk_import_rows_file
-        FOREIGN KEY (import_file_id) REFERENCES import_files (id)
-        ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      row_data JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (import_file_id, sheet_name, source_row_number)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_import_rows_hash ON import_rows (row_hash)
     """,
 ]
 
 
 @dataclass(frozen=True)
-class MysqlConfig:
-    host: str
-    port: int
-    user: str
-    password: str
-    database: str
+class PostgresConfig:
+    dsn: str
 
 
 def load_env_file(path: Path) -> None:
@@ -66,50 +61,21 @@ def load_env_file(path: Path) -> None:
     load_dotenv(path)
 
 
-def mysql_config_from_env() -> MysqlConfig:
-    database = os.getenv("MYSQL_DATABASE", "bluestock")
-    if not re.fullmatch(r"[A-Za-z0-9_]+", database):
-        raise SystemExit("MYSQL_DATABASE may only contain letters, numbers, and underscores.")
-
-    return MysqlConfig(
-        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
-        port=int(os.getenv("MYSQL_PORT", "3306")),
-        user=os.getenv("MYSQL_USER", "root"),
-        password=os.getenv("MYSQL_PASSWORD", ""),
-        database=database,
+def postgres_config_from_env() -> PostgresConfig:
+    return PostgresConfig(
+        dsn=os.getenv(
+            "DATABASE_URL",
+            "postgresql://bluestock:bluestock@127.0.0.1:5432/bluestock",
+        )
     )
 
 
-def connect_mysql(config: MysqlConfig, use_database: bool = True):
-    try:
-        import mysql.connector
-    except ImportError as exc:
-        raise SystemExit(
-            "Missing dependency: mysql-connector-python. "
-            "Install dependencies with `pip install -r requirements.txt`."
-        ) from exc
-
-    return mysql.connector.connect(
-        host=config.host,
-        port=config.port,
-        user=config.user,
-        password=config.password,
-        database=config.database if use_database else None,
-        autocommit=False,
-    )
+def connect_postgres(config: PostgresConfig):
+    return psycopg2.connect(config.dsn)
 
 
-def ensure_database(config: MysqlConfig) -> None:
-    connection = connect_mysql(config, use_database=False)
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"CREATE DATABASE IF NOT EXISTS `{config.database}` "
-                "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-            )
-        connection.commit()
-    finally:
-        connection.close()
+def ensure_database(config: PostgresConfig) -> None:
+    return None
 
 
 def ensure_schema(connection) -> None:
@@ -195,12 +161,12 @@ def upsert_import_file(connection, path: Path, dataset_dir: Path) -> int:
         INSERT INTO import_files
           (file_name, file_path, state_code, state_name, file_extension)
         VALUES (%s, %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE
-          file_name = VALUES(file_name),
-          state_code = VALUES(state_code),
-          state_name = VALUES(state_name),
-          file_extension = VALUES(file_extension),
-          id = LAST_INSERT_ID(id)
+        ON CONFLICT (file_path) DO UPDATE SET
+          file_name = EXCLUDED.file_name,
+          state_code = EXCLUDED.state_code,
+          state_name = EXCLUDED.state_name,
+          file_extension = EXCLUDED.file_extension
+        RETURNING id
     """
     with connection.cursor() as cursor:
         cursor.execute(
@@ -213,7 +179,7 @@ def upsert_import_file(connection, path: Path, dataset_dir: Path) -> int:
                 path.suffix.lower().lstrip("."),
             ),
         )
-        return int(cursor.lastrowid)
+        return int(cursor.fetchone()[0])
 
 
 def replace_existing_rows(connection, import_file_id: int) -> None:
@@ -233,15 +199,15 @@ def insert_rows(connection, rows: list[tuple], batch_size: int) -> int:
     sql = """
         INSERT INTO import_rows
           (import_file_id, sheet_name, source_row_number, row_hash, row_data)
-        VALUES (%s, %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE
-          row_hash = VALUES(row_hash),
-          row_data = VALUES(row_data)
+        VALUES %s
+        ON CONFLICT (import_file_id, sheet_name, source_row_number) DO UPDATE SET
+          row_hash = EXCLUDED.row_hash,
+          row_data = EXCLUDED.row_data
     """
     inserted = 0
     with connection.cursor() as cursor:
         for batch in batched(rows, batch_size):
-            cursor.executemany(sql, batch)
+            execute_values(cursor, sql, batch)
             inserted += len(batch)
     return inserted
 
@@ -251,10 +217,10 @@ def import_file(connection, path: Path, dataset_dir: Path, batch_size: int, repl
     if replace:
         replace_existing_rows(connection, import_file_id)
 
-    mysql_rows = []
+    postgres_rows = []
     for sheet_name, rows in read_workbook(path):
         for row_number, row_data in rows:
-            mysql_rows.append(
+            postgres_rows.append(
                 (
                     import_file_id,
                     sheet_name,
@@ -264,13 +230,13 @@ def import_file(connection, path: Path, dataset_dir: Path, batch_size: int, repl
                 )
             )
 
-    imported = insert_rows(connection, mysql_rows, batch_size)
+    imported = insert_rows(connection, postgres_rows, batch_size)
     connection.commit()
     return imported
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Import BlueStock spreadsheets into MySQL.")
+    parser = argparse.ArgumentParser(description="Import BlueStock spreadsheets into PostgreSQL.")
     parser.add_argument(
         "--dataset-dir",
         default=None,
@@ -279,7 +245,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--env-file",
         default=".env",
-        help="Path to a dotenv file containing MYSQL_* settings.",
+        help="Path to a dotenv file containing DATABASE_URL.",
     )
     parser.add_argument(
         "--batch-size",
@@ -290,7 +256,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--create-schema",
         action="store_true",
-        help="Create required MySQL tables before importing.",
+        help="Create required PostgreSQL tables before importing.",
     )
     parser.add_argument(
         "--replace",
@@ -313,11 +279,11 @@ def main() -> None:
     if not files:
         raise SystemExit(f"No supported spreadsheet files found in: {dataset_dir}")
 
-    mysql_config = mysql_config_from_env()
+    postgres_config = postgres_config_from_env()
     if args.create_schema:
-        ensure_database(mysql_config)
+        ensure_database(postgres_config)
 
-    connection = connect_mysql(mysql_config)
+    connection = connect_postgres(postgres_config)
     try:
         if args.create_schema:
             ensure_schema(connection)
