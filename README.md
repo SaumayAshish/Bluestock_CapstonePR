@@ -6,6 +6,9 @@ normalizes the hierarchy, and exposes the data through a FastAPI REST API.
 Architecture and import-design details are documented in
 `docs/technical_architecture.md`.
 
+Phase 2 API/dashboard implementation notes are documented in
+`docs/phase2_implementation.md`.
+
 ## Setup
 
 1. Create a virtual environment and install dependencies.
@@ -119,17 +122,28 @@ Endpoints:
 - `POST /auth/client-login`
 - `POST /admin/login`
 - `GET /admin/summary`
+- `GET /admin/analytics`
 - `GET /admin/clients`
 - `PATCH /admin/clients/{client_id}`
+- `POST /admin/clients/{client_id}/approve`
+- `POST /admin/clients/{client_id}/suspend`
 - `GET /admin/usage`
+- `GET /admin/villages?state_id=27&limit=500`
+- `GET /admin/api-logs`
+- `GET /admin/api-logs/export.csv`
 - `GET /portal/me`
 - `GET /portal/api-keys`
 - `POST /portal/api-keys`
+- `POST /portal/api-keys/{key_id}/rotate-secret`
+- `DELETE /portal/api-keys/{key_id}`
 - `GET /portal/usage`
 - `GET /v1/states`
+- `GET /v1/states/{id}/districts`
 - `GET /v1/districts?state_code=27`
+- `GET /v1/districts/{id}/subdistricts`
 - `GET /v1/sub-districts?district_id=1`
 - `GET /v1/villages?sub_district_id=1&q=ram&limit=50`
+- `GET /v1/subdistricts/{id}/villages?page=1&limit=50`
 - `GET /v1/autocomplete?q=ram&limit=20`
 - `GET /v1/search?q=ram&limit=20`
 

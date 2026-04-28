@@ -38,8 +38,23 @@ def main() -> None:
     try:
         execute_sql_file(connection, Path("sql/geography_schema.sql"))
         with connection.cursor() as cursor:
-            if not column_exists(cursor, "api_clients", "password_hash"):
-                cursor.execute("ALTER TABLE api_clients ADD COLUMN password_hash VARCHAR(255) NULL AFTER email")
+            api_client_columns = (
+                ("business_name", "ALTER TABLE api_clients ADD COLUMN business_name VARCHAR(255) NULL AFTER email"),
+                ("gst_number", "ALTER TABLE api_clients ADD COLUMN gst_number VARCHAR(32) NULL AFTER business_name"),
+                ("phone", "ALTER TABLE api_clients ADD COLUMN phone VARCHAR(32) NULL AFTER gst_number"),
+                ("password_hash", "ALTER TABLE api_clients ADD COLUMN password_hash VARCHAR(255) NULL AFTER phone"),
+                ("status", "ALTER TABLE api_clients ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'active' AFTER plan"),
+            )
+            for column, statement in api_client_columns:
+                if not column_exists(cursor, "api_clients", column):
+                    cursor.execute(statement)
+            if not column_exists(cursor, "api_keys", "name"):
+                cursor.execute("ALTER TABLE api_keys ADD COLUMN name VARCHAR(120) NOT NULL DEFAULT 'Default' AFTER client_id")
+            if not column_exists(cursor, "api_keys", "expires_at"):
+                cursor.execute("ALTER TABLE api_keys ADD COLUMN expires_at TIMESTAMP NULL AFTER last_used_at")
+            if not column_exists(cursor, "api_usage_events", "ip_address"):
+                cursor.execute("ALTER TABLE api_usage_events ADD COLUMN ip_address VARCHAR(64) NULL AFTER latency_ms")
+            cursor.execute("UPDATE api_clients SET status = 'active' WHERE status IS NULL OR status = ''")
 
             admin_email = os.getenv("ADMIN_EMAIL", "admin@bluestock.local")
             admin_password = os.getenv("ADMIN_PASSWORD", "admin12345")

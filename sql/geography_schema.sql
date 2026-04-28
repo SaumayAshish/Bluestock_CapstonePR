@@ -67,12 +67,17 @@ CREATE TABLE IF NOT EXISTS api_clients (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(255) NOT NULL,
   email VARCHAR(255) NOT NULL,
+  business_name VARCHAR(255) NULL,
+  gst_number VARCHAR(32) NULL,
+  phone VARCHAR(32) NULL,
   password_hash VARCHAR(255) NULL,
   plan VARCHAR(32) NOT NULL DEFAULT 'free',
+  status VARCHAR(32) NOT NULL DEFAULT 'pending_approval',
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_api_clients_email (email)
+  UNIQUE KEY uq_api_clients_email (email),
+  KEY ix_api_clients_status_plan (status, plan)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_users (
@@ -89,12 +94,14 @@ CREATE TABLE IF NOT EXISTS admin_users (
 CREATE TABLE IF NOT EXISTS api_keys (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   client_id BIGINT UNSIGNED NOT NULL,
+  name VARCHAR(120) NOT NULL DEFAULT 'Default',
   key_prefix VARCHAR(16) NOT NULL,
   key_hash CHAR(64) NOT NULL,
   secret_hash CHAR(64) NOT NULL,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_used_at TIMESTAMP NULL,
+  expires_at TIMESTAMP NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uq_api_keys_key_hash (key_hash),
   KEY ix_api_keys_client (client_id),
@@ -108,10 +115,20 @@ CREATE TABLE IF NOT EXISTS api_usage_events (
   endpoint VARCHAR(255) NOT NULL,
   status_code SMALLINT UNSIGNED NOT NULL,
   latency_ms INT UNSIGNED NOT NULL,
+  ip_address VARCHAR(64) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY ix_api_usage_client_time (client_id, created_at),
   KEY ix_api_usage_key_time (api_key_id, created_at),
   CONSTRAINT fk_api_usage_client FOREIGN KEY (client_id) REFERENCES api_clients (id),
   CONSTRAINT fk_api_usage_key FOREIGN KEY (api_key_id) REFERENCES api_keys (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_state_access (
+  user_id BIGINT UNSIGNED NOT NULL,
+  state_id INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, state_id),
+  CONSTRAINT fk_user_state_access_user FOREIGN KEY (user_id) REFERENCES api_clients (id),
+  CONSTRAINT fk_user_state_access_state FOREIGN KEY (state_id) REFERENCES states (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
