@@ -125,8 +125,35 @@ Implemented backend endpoints:
 
 Registration now creates `pending_approval` accounts. Admin approval is required before API key creation and API access.
 
+## Frontend Dashboard
+
+Implemented in `frontend/`:
+
+- React 18 + TypeScript + Vite application shell.
+- Admin dashboard wired to `/admin/login`, `/admin/summary`, `/admin/analytics`, and `/admin/clients`.
+- B2B portal wired to `/auth/register`, `/auth/client-login`, `/portal/me`, `/portal/api-keys`, and `/portal/usage`.
+- API key creation, secret rotation, and revocation controls.
+- Recharts panels for request volume, plan mix, endpoint usage, response times, and top states.
+- Zustand token storage and React Query server-state loading.
+
+The older FastAPI-rendered `/admin` and `/portal` pages remain available as
+lightweight fallback pages.
+
+## Deployment Scaffolding
+
+Implemented:
+
+- `vercel.json` builds `frontend/` and routes backend requests to FastAPI.
+- `api/index.py` exports the existing FastAPI app for Vercel's Python runtime.
+- `docs/deployment.md` documents required Vercel, Neon, and Redis environment variables.
+
+## Prisma / Node Transition
+
+Placeholder integration point:
+
+- `prisma/schema.prisma` maps the current PostgreSQL schema for a future Node service.
+- The active backend remains FastAPI + `psycopg2`; Prisma is not used by runtime code.
+
 ## Not Yet Implemented
 
-The repo still uses FastAPI-rendered dashboard pages. The requested React 18 + TypeScript + Vite + Tailwind + Recharts + Zustand + React Query frontend is not present yet. The backend endpoints now expose the data needed to build that frontend in a later phase.
-
-Prisma, SMTP emails, payment/revenue metrics, and a separate demo client app remain future implementation work. The current backend is FastAPI with Neon-compatible PostgreSQL and Redis.
+SMTP emails, payment/revenue metrics, and a separate demo client app remain future implementation work. The current backend is FastAPI with Neon-compatible PostgreSQL and Redis.

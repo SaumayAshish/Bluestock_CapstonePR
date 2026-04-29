@@ -1,0 +1,148 @@
+// Optional Phase 2 scaffold for a future Node/Prisma transition.
+// The production backend currently uses FastAPI + psycopg2 + explicit SQL.
+// Keep this schema mapped to the existing PostgreSQL tables if Node services are added.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Country {
+  id        Int      @id @default(autoincrement()) @db.SmallInt
+  code      String   @unique @db.Char(2)
+  name      String   @unique @db.VarChar(128)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  states    State[]
+
+  @@map("countries")
+}
+
+model State {
+  id         Int        @id @default(autoincrement())
+  countryId  Int        @map("country_id") @db.SmallInt
+  code       String     @unique @db.VarChar(8)
+  name       String     @db.VarChar(255)
+  searchName String     @map("search_name") @db.VarChar(255)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  country    Country    @relation(fields: [countryId], references: [id])
+  districts  District[]
+
+  @@index([countryId, searchName], map: "ix_states_country_name")
+  @@map("states")
+}
+
+model District {
+  id           Int           @id @default(autoincrement())
+  stateId      Int           @map("state_id")
+  code         String        @db.VarChar(8)
+  name         String        @db.VarChar(255)
+  searchName   String        @map("search_name") @db.VarChar(255)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  state        State         @relation(fields: [stateId], references: [id])
+  subDistricts SubDistrict[]
+
+  @@unique([stateId, code])
+  @@index([stateId, searchName], map: "ix_districts_state_name")
+  @@map("districts")
+}
+
+model SubDistrict {
+  id         Int       @id @default(autoincrement())
+  districtId Int       @map("district_id")
+  code       String    @db.VarChar(16)
+  name       String    @db.VarChar(255)
+  searchName String    @map("search_name") @db.VarChar(255)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  district   District  @relation(fields: [districtId], references: [id])
+  villages   Village[]
+
+  @@unique([districtId, code])
+  @@index([districtId, searchName], map: "ix_sub_districts_district_name")
+  @@map("sub_districts")
+}
+
+model Village {
+  id            BigInt      @id @default(autoincrement())
+  subDistrictId Int         @map("sub_district_id")
+  code          String      @db.VarChar(16)
+  name          String      @db.VarChar(255)
+  displayName   String      @map("display_name") @db.VarChar(1024)
+  searchName    String      @map("search_name") @db.VarChar(255)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  subDistrict   SubDistrict @relation(fields: [subDistrictId], references: [id])
+
+  @@unique([subDistrictId, code])
+  @@index([subDistrictId, searchName], map: "ix_villages_sub_district_name")
+  @@index([searchName], map: "ix_villages_search_name")
+  @@map("villages")
+}
+
+model ApiClient {
+  id           BigInt          @id @default(autoincrement())
+  name         String          @db.VarChar(255)
+  email        String          @unique @db.VarChar(255)
+  businessName String?         @map("business_name") @db.VarChar(255)
+  gstNumber    String?         @map("gst_number") @db.VarChar(32)
+  phone        String?         @db.VarChar(32)
+  passwordHash String?         @map("password_hash") @db.VarChar(255)
+  plan         String          @default("free") @db.VarChar(32)
+  status       String          @default("pending_approval") @db.VarChar(32)
+  isActive     Boolean         @default(true) @map("is_active")
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  apiKeys      ApiKey[]
+  usageEvents  ApiUsageEvent[]
+
+  @@index([status, plan], map: "ix_api_clients_status_plan")
+  @@map("api_clients")
+}
+
+model ApiKey {
+  id          BigInt          @id @default(autoincrement())
+  clientId    BigInt          @map("client_id")
+  name        String          @default("Default") @db.VarChar(120)
+  keyPrefix   String          @map("key_prefix") @db.VarChar(16)
+  keyHash     String          @unique @map("key_hash") @db.Char(64)
+  secretHash  String          @map("secret_hash") @db.Char(64)
+  isActive    Boolean         @default(true) @map("is_active")
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastUsedAt  DateTime?       @map("last_used_at") @db.Timestamptz(6)
+  expiresAt   DateTime?       @map("expires_at") @db.Timestamptz(6)
+  client      ApiClient       @relation(fields: [clientId], references: [id])
+  usageEvents ApiUsageEvent[]
+
+  @@index([clientId], map: "ix_api_keys_client")
+  @@map("api_keys")
+}
+
+model ApiUsageEvent {
+  id         BigInt    @id @default(autoincrement())
+  clientId   BigInt    @map("client_id")
+  apiKeyId   BigInt    @map("api_key_id")
+  endpoint   String    @db.VarChar(255)
+  statusCode Int       @map("status_code") @db.SmallInt
+  latencyMs  Int       @map("latency_ms")
+  ipAddress  String?   @map("ip_address") @db.VarChar(64)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  client     ApiClient @relation(fields: [clientId], references: [id])
+  apiKey     ApiKey    @relation(fields: [apiKeyId], references: [id])
+
+  @@index([clientId, createdAt], map: "ix_api_usage_client_time")
+  @@index([apiKeyId, createdAt], map: "ix_api_usage_key_time")
+  @@index([endpoint, createdAt], map: "ix_api_usage_endpoint_time")
+  @@map("api_usage_events")
+}
+
+model AdminUser {
+  id           BigInt   @id @default(autoincrement())
+  name         String   @db.VarChar(255)
+  email        String   @unique @db.VarChar(255)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("admin_users")
+}

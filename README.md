@@ -10,6 +10,8 @@ Architecture and import-design details are documented in
 Phase 2 API/dashboard implementation notes are documented in
 `docs/phase2_implementation.md`.
 
+Deployment scaffolding is documented in `docs/deployment.md`.
+
 ## Setup
 
 1. Create a virtual environment and install dependencies.
@@ -58,6 +60,16 @@ Phase 2 API/dashboard implementation notes are documented in
    ```powershell
    python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
    ```
+
+9. Start the React admin/portal app.
+
+   ```powershell
+   cd frontend
+   npm ci
+   npm run dev
+   ```
+
+   The Vite dev server proxies API calls to `http://127.0.0.1:8000`.
 
 ## Data Model
 
@@ -129,4 +141,3 @@ Endpoints:
 - `GET /v1/search?q=ram&limit=20`
 
 Interactive docs are available at `http://127.0.0.1:8000/docs`.
-

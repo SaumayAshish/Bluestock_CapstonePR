@@ -9,12 +9,12 @@
 | Backend runtime | Python + FastAPI | Complete | The current codebase exposes REST endpoints from `app/main.py`. This differs from the earlier Node.js + Express proposal. |
 | Database | PostgreSQL 16 / Neon-compatible PostgreSQL | Complete | `docker-compose.yml` provisions local PostgreSQL; `DATABASE_URL` can point to Neon. |
 | ORM | Direct SQL via `psycopg2` | Complete | The project uses explicit PostgreSQL SQL for imports, normalization, authentication, and analytics queries. |
-| Frontend framework | Server-rendered HTML/JavaScript from FastAPI | Partial | Admin and client portal pages are available, but there is no React/Vite application. |
-| Charting library | None | Not implemented | Usage data is exposed in tables and JSON endpoints. |
+| Frontend framework | React 18 + TypeScript + Vite | Complete | `frontend/` contains the admin dashboard and B2B portal. FastAPI-rendered pages remain fallback pages. |
+| Charting library | Recharts | Complete | Dashboard and portal analytics use reusable Recharts components. |
 | Caching layer | Redis | Complete | Redis is used for response caching and distributed rate-limit counters when `REDIS_URL` is configured. |
 | Rate limiting | Redis + database-backed usage fallback | Complete | Daily and burst limits are enforced per API key. |
 | Authentication | API key/secret + HMAC JWT + PBKDF2 password hashes | Complete | API clients use `X-API-Key` and `X-API-Secret`; portal/admin sessions use JWT bearer tokens. |
-| Hosting platform | Local Uvicorn/Docker | Partial | No Vercel/serverless deployment configuration is present. |
+| Hosting platform | Local Uvicorn/Docker + Vercel scaffold | Partial | `vercel.json` and `api/index.py` are present; provider credentials and projects are external. |
 
 ### 3.2 System Architecture Diagram
 
