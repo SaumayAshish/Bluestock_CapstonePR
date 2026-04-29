@@ -1,0 +1,32 @@
+# Academic submission excludes
+.git/
+.venv/
+.vercel/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.tmp
+.env
+.env.local
+.env.*.local
+
+# Large/raw data and OS archive metadata
+dataset/
+__MACOSX/
+
+# Frontend dependencies and generated builds
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.next/
+coverage/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.tsbuildinfo
+
+# Local generated submission output
+submission_package/
