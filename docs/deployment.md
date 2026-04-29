@@ -22,6 +22,18 @@ npm ci
 npm run build
 ```
 
+Local demo data seed:
+
+```powershell
+python scripts\setup_saas.py
+python scripts\seed_demo_portal.py
+```
+
+The demo seed creates an approved portal account
+`demo@bluestock.local` / `Demo12345` with active API keys and populated usage
+analytics for academic frontend demonstrations. The seed is intended for local
+or staging demo environments only, not production.
+
 ## Neon
 
 Set `DATABASE_URL` in Vercel to the Neon pooled PostgreSQL connection string.
@@ -63,6 +75,7 @@ Complete:
 - Admin dashboard screens wired to current backend endpoints
 - B2B portal screens wired to current backend endpoints
 - API key create, rotate, revoke controls
+- Approved demo client seeding and usage analytics seed data
 - Recharts analytics components
 - Vercel build/routing scaffold
 - Redis-backed backend integration points

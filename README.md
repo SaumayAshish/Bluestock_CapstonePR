@@ -42,6 +42,10 @@ Deployment scaffolding is documented in `docs/deployment.md`.
    python scripts\normalize_geography.py --create-schema --replace
    ```
 
+   The normalizer de-duplicates repeated state, district, sub-district, and
+   village code rows before upsert so the import remains idempotent even when
+   source spreadsheets contain duplicate administrative code combinations.
+
 6. Verify the normalized hierarchy.
 
    ```powershell
@@ -55,13 +59,28 @@ Deployment scaffolding is documented in `docs/deployment.md`.
    python scripts\create_api_client.py --name "Local Development Client" --email dev@example.com --plan unlimited
    ```
 
-8. Start the API.
+8. Seed the approved B2B portal demo account and realistic usage analytics.
+
+   ```powershell
+   python scripts\seed_demo_portal.py
+   ```
+
+   Demo portal credentials:
+
+   - Email: `demo@bluestock.local`
+   - Password: `Demo12345`
+
+   This creates an `active` unlimited demo client, sample API keys, and 14 days
+   of usage data so the Daily Usage and Endpoint Mix charts are populated for
+   frontend demonstrations.
+
+9. Start the API.
 
    ```powershell
    python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
    ```
 
-9. Start the React admin/portal app.
+10. Start the React admin/portal app.
 
    ```powershell
    cd frontend
@@ -70,6 +89,10 @@ Deployment scaffolding is documented in `docs/deployment.md`.
    ```
 
    The Vite dev server proxies API calls to `http://127.0.0.1:8000`.
+
+If another local PostgreSQL service already uses port `5432`, publish the
+Docker Postgres container on another host port such as `5433` and update
+`DATABASE_URL` accordingly.
 
 ## Data Model
 

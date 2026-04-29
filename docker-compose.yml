@@ -12,6 +12,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/postgres_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./sql/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command:
+      - "postgres"
+      - "-c"
+      - "hba_file=/etc/postgresql/pg_hba.conf"
 
   redis:
     image: redis:7-alpine

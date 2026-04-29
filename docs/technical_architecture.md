@@ -193,6 +193,11 @@ The import pipeline expects the MDDS village directory spreadsheet layout:
    python scripts\normalize_geography.py --create-schema --replace
    ```
 
+   The normalizer selects one canonical source row per administrative code path
+   before each upsert. This prevents duplicate spreadsheet rows from triggering
+   PostgreSQL `ON CONFLICT` cardinality errors and keeps repeated imports
+   idempotent.
+
 4. Verify normalized data integrity:
 
    ```powershell
@@ -206,10 +211,20 @@ The import pipeline expects the MDDS village directory spreadsheet layout:
    python scripts\setup_saas.py
    ```
 
+6. Seed the approved B2B portal demo account and analytics:
+
+   ```powershell
+   python scripts\seed_demo_portal.py
+   ```
+
+   The demo seed creates `demo@bluestock.local` / `Demo12345`, active API keys,
+   and 14 days of realistic usage events for portal chart demonstrations.
+
 ### 5.4 Error Handling Strategy
 
 - Raw import is idempotent per file, sheet, and row number.
 - Imported rows keep the original source row number for manual review.
-- Normalization uses upserts to avoid duplicate hierarchy records.
+- Normalization uses de-duplicated upserts to avoid duplicate hierarchy records
+  and duplicate source-code conflicts.
 - `scripts/verify_geography.py` reports orphaned rows, duplicate codes within parent scopes, and a known sample hierarchy check.
 - Ambiguous or invalid source rows should be reviewed from `import_rows` using `source_row_number` and `row_data`.

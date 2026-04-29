@@ -56,7 +56,9 @@ def transform(connection, replace: bool) -> None:
             INSERT INTO states (country_id, code, name, search_name)
             SELECT c.id, raw.state_code, raw.state_name, LOWER(raw.state_name)
             FROM (
-              SELECT DISTINCT
+              SELECT DISTINCT ON (
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1'))
+              )
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')) AS state_code,
                 TRIM(JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_2'))) AS state_name
               FROM import_rows r
@@ -64,6 +66,7 @@ def transform(connection, replace: bool) -> None:
                 AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')) = '000'
                 AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5')) = '00000'
                 AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7')) = '000000'
+              ORDER BY JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')), state_name
             ) raw
             JOIN countries c ON c.code = 'IN'
             WHERE raw.state_code <> '00' AND raw.state_name <> ''
@@ -84,7 +87,10 @@ def transform(connection, replace: bool) -> None:
             INSERT INTO districts (state_id, code, name, search_name)
             SELECT s.id, raw.district_code, raw.district_name, LOWER(raw.district_name)
             FROM (
-              SELECT DISTINCT
+              SELECT DISTINCT ON (
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3'))
+              )
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')) AS state_code,
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')) AS district_code,
                 TRIM(JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_4'))) AS district_name
@@ -93,6 +99,10 @@ def transform(connection, replace: bool) -> None:
                 AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')) <> '000'
                 AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5')) = '00000'
                 AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7')) = '000000'
+              ORDER BY
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')),
+                district_name
             ) raw
             JOIN states s ON s.code = raw.state_code
             WHERE raw.district_name <> ''
@@ -113,7 +123,11 @@ def transform(connection, replace: bool) -> None:
             INSERT INTO sub_districts (district_id, code, name, search_name)
             SELECT d.id, raw.sub_district_code, raw.sub_district_name, LOWER(raw.sub_district_name)
             FROM (
-              SELECT DISTINCT
+              SELECT DISTINCT ON (
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5'))
+              )
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')) AS state_code,
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')) AS district_code,
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5')) AS sub_district_code,
@@ -123,6 +137,11 @@ def transform(connection, replace: bool) -> None:
                 AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')) <> '000'
                 AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5')) <> '00000'
                 AND JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7')) = '000000'
+              ORDER BY
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5')),
+                sub_district_name
             ) raw
             JOIN states s ON s.code = raw.state_code
             JOIN districts d ON d.state_id = s.id AND d.code = raw.district_code
@@ -149,7 +168,12 @@ def transform(connection, replace: bool) -> None:
               CONCAT(raw.village_name, ', ', sd.name, ', ', d.name, ', ', s.name, ', India'),
               LOWER(raw.village_name)
             FROM (
-              SELECT DISTINCT
+              SELECT DISTINCT ON (
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7'))
+              )
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')) AS state_code,
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')) AS district_code,
                 JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5')) AS sub_district_code,
@@ -160,6 +184,12 @@ def transform(connection, replace: bool) -> None:
                 AND r.row_data ->> 'column_3' <> '000'
                 AND r.row_data ->> 'column_5' <> '00000'
                 AND r.row_data ->> 'column_7' <> '000000'
+              ORDER BY
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_1')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_3')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_5')),
+                JSON_UNQUOTE(JSON_EXTRACT(r.row_data, '$.column_7')),
+                village_name
             ) raw
             JOIN states s ON s.code = raw.state_code
             JOIN districts d ON d.state_id = s.id AND d.code = raw.district_code

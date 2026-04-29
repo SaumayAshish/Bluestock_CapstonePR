@@ -111,6 +111,9 @@ Organizations requiring village-level data for service delivery, logistics plann
 - Generates search-optimized fields (search_name with lowercase normalization)
 - Constructs display_name for villages with full hierarchical context
 - Uses UPSERT semantics (ON CONFLICT DO UPDATE) for idempotent re-runs
+- Selects one canonical row per state/district/sub-district/village code path
+  before upsert so duplicate source rows do not trigger PostgreSQL cardinality
+  errors
 - Supports full dataset refresh with TRUNCATE CASCADE option
 
 **Data Transformation Logic**:
@@ -156,7 +159,19 @@ Organizations requiring village-level data for service delivery, logistics plann
 - Stores SHA-256 hashes of credentials (not plaintext)
 - Returns plaintext credentials for one-time display
 
-## 3.6 FastAPI Backend (`app/main.py`)
+## 3.6 Demo Portal Seed Module (`scripts/seed_demo_portal.py`)
+
+**Purpose**: Prepare a clean, approved B2B portal account for academic frontend demonstrations.
+
+**Features**:
+- Creates or updates `demo@bluestock.local` with password `Demo12345`
+- Sets the demo account to `active` on the `unlimited` plan
+- Creates one active API key and one revoked legacy key
+- Seeds 14 days of realistic `api_usage_events`
+- Populates endpoint mix data for search, autocomplete, villages, states, and districts
+- Can be rerun to reset the demo account to a clean presentation state
+
+## 3.7 FastAPI Backend (`app/main.py`)
 
 **Purpose**: Serve REST API endpoints with authentication and rate limiting.
 
@@ -319,26 +334,32 @@ Features:
 
 **Authentication View**:
 - Segmented control for Login/Register toggle
+- Demo login helper displaying the approved local demo credentials
 - Registration form fields: Name, Business, Plan, GST, Phone, Email, Password
 - Login form: Email, Password
-- Error display for failed requests
+- Friendly validation, approval, and request error display without raw JSON output
 
 **Portal View** (post-login):
 - **Account Metrics**:
   - Account name, status, daily limit, 24h requests
+- Approval banner for newly registered accounts still awaiting admin approval
 - **API Key Management**:
   - Create key button
   - Credential display box with copy-to-clipboard
   - Keys table: Name, Prefix, Status, Created, Last Used, Actions
   - Actions: Rotate secret, Revoke key
+  - Success notices for create, rotate, and revoke actions
 - **Usage Analytics**:
   - Daily usage area chart (14-day history)
   - Endpoint mix bar chart
+  - Empty-state messaging for accounts with no usage yet
 
 **Key Lifecycle**:
 1. Create: Generates new key/secret pair, displays secret one-time
 2. Rotate: Generates new secret for existing key
 3. Revoke: Sets is_active=FALSE, preventing further use
+4. Demo portal actions log lightweight usage events so 24h metrics and charts
+   visibly update during the presentation
 
 ### 4.1.7 Chart Components (`components/Charts.tsx`)
 
@@ -1014,17 +1035,25 @@ cp .env.example .env
 python scripts/setup_saas.py
 
 # Import geography data
-python scripts/import_to_postgres.py --dataset-dir ./dataset --create-schema
+python scripts/import_to_postgres.py --dataset-dir ./dataset --create-schema --replace
 
 # Normalize geography
-python scripts/normalize_geography.py --create-schema
+python scripts/normalize_geography.py --create-schema --replace
 
 # Verify data
 python scripts/verify_geography.py
 
+# Seed approved B2B portal demo account and analytics
+python scripts/seed_demo_portal.py
+
 # Start server
 uvicorn app.main:app --reload --port 8000
 ```
+
+Demo portal login for presentations:
+
+- Email: `demo@bluestock.local`
+- Password: `Demo12345`
 
 ## Frontend Setup
 

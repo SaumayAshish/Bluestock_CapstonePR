@@ -1,15 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, KeyRound, RefreshCw, RotateCw, Trash2 } from "lucide-react";
+import { CheckCircle2, Copy, KeyRound, LogOut, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { EndpointBar, RequestsArea } from "../components/Charts";
 import { StatusPill } from "../components/StatusPill";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 
+function formValue(form: FormData, name: string) {
+  return String(form.get(name) || "").trim();
+}
+
+function optionalFormValue(form: FormData, name: string) {
+  const value = formValue(form, name);
+  return value || undefined;
+}
+
 export function Portal() {
-  const { portalToken, setToken } = useAuthStore();
+  const { portalToken, setToken, logout } = useAuthStore();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [credential, setCredential] = useState<{ api_key?: string; api_secret?: string } | null>(null);
   const me = useQuery({ queryKey: ["portal-me"], queryFn: () => api.portalMe(portalToken), enabled: !!portalToken });
   const keys = useQuery({ queryKey: ["portal-keys"], queryFn: () => api.portalKeys(portalToken), enabled: !!portalToken });
@@ -20,38 +30,62 @@ export function Portal() {
     mutationFn: (name: string) => api.createPortalKey(portalToken, name),
     onSuccess: (data) => {
       setCredential(data);
-      void queryClient.invalidateQueries({ queryKey: ["portal-keys"] });
+      setNotice("API key created. Copy the secret now; it will not be shown again.");
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["portal-me"] }),
+        queryClient.invalidateQueries({ queryKey: ["portal-keys"] }),
+        queryClient.invalidateQueries({ queryKey: ["portal-usage"] })
+      ]);
     }
   });
   const rotateKey = useMutation({
     mutationFn: (id: number) => api.rotatePortalKey(portalToken, id),
-    onSuccess: (data) => setCredential({ api_secret: data.api_secret })
+    onSuccess: (data) => {
+      setCredential({ api_secret: data.api_secret });
+      setNotice("Secret rotated successfully. Existing clients must switch to the new secret.");
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["portal-me"] }),
+        queryClient.invalidateQueries({ queryKey: ["portal-usage"] })
+      ]);
+    }
   });
   const revokeKey = useMutation({
     mutationFn: (id: number) => api.revokePortalKey(portalToken, id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["portal-keys"] })
+    onSuccess: () => {
+      setCredential(null);
+      setNotice("API key revoked. It is disabled immediately.");
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["portal-me"] }),
+        queryClient.invalidateQueries({ queryKey: ["portal-keys"] }),
+        queryClient.invalidateQueries({ queryKey: ["portal-usage"] })
+      ]);
+    }
   });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    setNotice("");
     const form = new FormData(event.currentTarget);
     try {
-      const email = String(form.get("email"));
-      const password = String(form.get("password"));
+      const email = formValue(form, "email");
+      const password = formValue(form, "password");
       const result =
         mode === "login"
           ? await api.portalLogin(email, password)
           : await api.register({
-              name: String(form.get("name")),
-              business_name: String(form.get("business")),
+              name: formValue(form, "name"),
+              business_name: optionalFormValue(form, "business"),
               email,
               password,
-              plan: String(form.get("plan")),
-              gst_number: String(form.get("gst")),
-              phone: String(form.get("phone"))
+              plan: formValue(form, "plan"),
+              gst_number: optionalFormValue(form, "gst"),
+              phone: optionalFormValue(form, "phone")
             });
       setToken("portal", result.token);
+      if (mode === "register") {
+        setNotice("Registration received. Demo accounts are approved by the admin before key creation.");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Portal request failed");
     }
@@ -66,6 +100,11 @@ export function Portal() {
           <p className="lede">Business registration, login, API key lifecycle, and client-level usage analytics.</p>
         </div>
         <form className="login-card" onSubmit={submit}>
+          <div className="demo-note">
+            <strong>Demo login</strong>
+            <span>demo@bluestock.local</span>
+            <span>Demo12345</span>
+          </div>
           <div className="segmented">
             <button type="button" className={mode === "login" ? "selected" : ""} onClick={() => setMode("login")}>Login</button>
             <button type="button" className={mode === "register" ? "selected" : ""} onClick={() => setMode("register")}>Register</button>
@@ -82,6 +121,7 @@ export function Portal() {
           <label>Email<input name="email" /></label>
           <label>Password<input name="password" type="password" /></label>
           {error && <p className="form-error">{error}</p>}
+          {notice && <p className="form-success"><CheckCircle2 size={16} /> {notice}</p>}
           <button type="submit">{mode === "login" ? "Sign in" : "Create account"}</button>
         </form>
       </section>
@@ -94,9 +134,20 @@ export function Portal() {
         <div>
           <p className="eyebrow">Complete implementation</p>
           <h1>B2B User Portal</h1>
+          <p className="lede">Approved demo buyer account with live API key controls and usage analytics.</p>
         </div>
-        <button onClick={() => void Promise.all([me.refetch(), keys.refetch(), usage.refetch()])}><RefreshCw size={16} /> Refresh</button>
+        <div className="header-actions">
+          <button onClick={() => void Promise.all([me.refetch(), keys.refetch(), usage.refetch()])}><RefreshCw size={16} /> Refresh</button>
+          <button className="secondary" onClick={() => logout("portal")}><LogOut size={16} /> Sign out</button>
+        </div>
       </header>
+
+      {me.data?.client.status === "pending_approval" && (
+        <section className="approval-banner">
+          <strong>Approval pending</strong>
+          <span>Your registration is saved. An administrator must approve the account before API keys can be created.</span>
+        </section>
+      )}
 
       <section className="metric-grid">
         <div className="metric"><span>Account</span><strong>{me.data?.client.name || "-"}</strong></div>
@@ -108,8 +159,11 @@ export function Portal() {
       <section className="panel">
         <div className="panel-heading">
           <div><h2>API Key Management</h2><p>Create, rotate, and revoke credentials against the existing portal API.</p></div>
-          <button onClick={() => createKey.mutate("Dashboard key")}><KeyRound size={16} /> Create key</button>
+          <button disabled={createKey.isPending || me.data?.client.status !== "active"} onClick={() => createKey.mutate("Dashboard demo key")}>
+            <KeyRound size={16} /> {createKey.isPending ? "Creating..." : "Create key"}
+          </button>
         </div>
+        {notice && <p className="form-success"><CheckCircle2 size={16} /> {notice}</p>}
         {credential && (
           <div className="secret-box">
             {credential.api_key && <code>X-API-Key: {credential.api_key}</code>}
@@ -117,7 +171,9 @@ export function Portal() {
             <button className="icon-button" title="Copy credentials" onClick={() => navigator.clipboard.writeText(Object.values(credential).filter(Boolean).join("\n"))}><Copy size={16} /></button>
           </div>
         )}
-        {createKey.error && <p className="form-error">{createKey.error.message}</p>}
+        {createKey.error && <p className="form-error">Key creation is available after account approval. Use the seeded demo login for the live workflow.</p>}
+        {rotateKey.error && <p className="form-error">Unable to rotate this key. Refresh the portal and try again.</p>}
+        {revokeKey.error && <p className="form-error">Unable to revoke this key. Refresh the portal and try again.</p>}
         <div className="table-wrap">
           <table>
             <thead><tr><th>Name</th><th>Prefix</th><th>Status</th><th>Created</th><th>Last Used</th><th>Actions</th></tr></thead>

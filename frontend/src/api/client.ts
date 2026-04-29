@@ -6,6 +6,40 @@ type RequestOptions = RequestInit & {
   token?: string;
 };
 
+function formatApiError(payload: unknown): string {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  const detail = "detail" in payload ? (payload as { detail?: unknown }).detail : payload;
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (!item || typeof item !== "object") {
+          return String(item);
+        }
+        const error = item as { loc?: unknown[]; msg?: unknown };
+        const field = Array.isArray(error.loc) ? error.loc.filter((part) => part !== "body").join(".") : "";
+        return field ? `${field}: ${String(error.msg || "Invalid value")}` : String(error.msg || "Invalid value");
+      })
+      .join("; ");
+  }
+  if (detail && typeof detail === "object" && "msg" in detail) {
+    return String((detail as { msg?: unknown }).msg);
+  }
+  if ("error" in payload && payload.error && typeof payload.error === "object") {
+    const error = payload.error as { message?: unknown; code?: unknown };
+    return String(error.message || error.code || "Request failed");
+  }
+  return JSON.stringify(detail);
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (!headers.has("Content-Type") && options.body) {
@@ -18,7 +52,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json") ? await response.json() : await response.text();
   if (!response.ok) {
-    const detail = typeof payload === "object" && payload && "detail" in payload ? String(payload.detail) : String(payload);
+    const detail = formatApiError(payload);
     throw new Error(detail || `Request failed with ${response.status}`);
   }
   return payload as T;

@@ -20,6 +20,8 @@ Key technical achievements include:
 - Graceful degradation when Redis is unavailable (in-memory rate limiting fallback)
 - Secure credential storage using PBKDF2 password hashing and SHA-256 API secret hashes
 - Real-time analytics dashboards powered by TanStack Query and Recharts
+- Demo-ready B2B portal seed workflow with an approved client account, active
+  API key lifecycle controls, and populated usage analytics
 - Comprehensive data validation utilities ensuring referential integrity
 
 The system is deployment-ready with environment-based configuration, connection pooling, structured error responses, and security headers. All core features specified in the requirements are fully implemented and functional.
@@ -161,6 +163,7 @@ The system is deployment-ready with environment-based configuration, connection 
 | `scripts/verify_geography.py` | Validate referential integrity |
 | `scripts/setup_saas.py` | Initialize SaaS schema and admin user |
 | `scripts/create_api_client.py` | Create API client with credentials |
+| `scripts/seed_demo_portal.py` | Seed approved B2B demo client and analytics |
 
 ### 2.4 Database Schema
 

@@ -125,6 +125,25 @@ Implemented backend endpoints:
 
 Registration now creates `pending_approval` accounts. Admin approval is required before API key creation and API access.
 
+For academic/demo presentation readiness, the project includes
+`scripts/seed_demo_portal.py`. It creates an approved demo client with:
+
+- email `demo@bluestock.local`
+- password `Demo12345`
+- plan `unlimited`
+- active API key credentials
+- 14 days of realistic usage history in `api_usage_events`
+- endpoint distribution data for `/v1/search`, `/v1/autocomplete`,
+  `/v1/villages`, `/v1/states`, and `/v1/districts`
+
+Portal key lifecycle actions are fully functional for this approved account:
+
+1. Create key generates a one-time key/secret pair.
+2. Rotate secret replaces the selected key's secret.
+3. Revoke disables the selected key immediately.
+4. Create, rotate, and revoke actions insert lightweight demo usage events so
+   the 24h request count and charts visibly update during a frontend demo.
+
 ## Frontend Dashboard
 
 Implemented in `frontend/`:
@@ -135,6 +154,11 @@ Implemented in `frontend/`:
 - API key creation, secret rotation, and revocation controls.
 - Recharts panels for request volume, plan mix, endpoint usage, response times, and top states.
 - Zustand token storage and React Query server-state loading.
+- Friendly portal error handling for registration and approval states. FastAPI
+  validation/error payloads are converted into readable messages instead of
+  raw JSON or `[object Object]`.
+- Empty chart states for accounts without usage data, while the seeded demo
+  account shows populated Daily Usage and Endpoint Mix visualizations.
 
 The older FastAPI-rendered `/admin` and `/portal` pages remain available as
 lightweight fallback pages.

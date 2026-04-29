@@ -17,7 +17,14 @@ import {
 
 const colors = ["#2563eb", "#16a34a", "#f97316", "#7c3aed", "#0891b2", "#dc2626"];
 
+function EmptyChart({ label }: { label: string }) {
+  return <div className="chart-empty">{label}</div>;
+}
+
 export function RequestsArea({ data }: { data: Array<Record<string, string | number>> }) {
+  if (data.length === 0) {
+    return <EmptyChart label="Usage data appears here after API activity." />;
+  }
   return (
     <ResponsiveContainer width="100%" height={260}>
       <AreaChart data={data}>
@@ -76,11 +83,14 @@ export function ResponseTimeLine({ data }: { data: Array<Record<string, string |
 }
 
 export function EndpointBar({ data }: { data: Array<Record<string, string | number>> }) {
+  if (data.length === 0) {
+    return <EmptyChart label="Endpoint mix appears here after requests are logged." />;
+  }
   return (
     <ResponsiveContainer width="100%" height={260}>
-      <BarChart data={data}>
+      <BarChart data={data} margin={{ bottom: 28 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-        <XAxis dataKey="endpoint" tick={{ fontSize: 11 }} />
+        <XAxis dataKey="endpoint" tick={{ fontSize: 11 }} angle={-18} textAnchor="end" interval={0} />
         <YAxis tick={{ fontSize: 12 }} />
         <Tooltip />
         <Bar dataKey="requests" fill="#0891b2" radius={[4, 4, 0, 0]} />
